@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Build output
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local secrets (never commit)
+*.env
+Secrets.xcconfig

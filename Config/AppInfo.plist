@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keys Xcode's generated Info.plist has no build setting for. Merged with the
+  generated file at build time (GENERATE_INFOPLIST_FILE stays on). Kept outside
+  the synchronized RecoverySignal2/ folder so it isn't also copied as a resource.
+-->
+<plist version="1.0">
+<dict>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Trace uses the microphone only when you start dictation to describe a meal.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Trace transcribes your meal description. When on-device recognition is unavailable, Apple may process the audio online with your consent.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+</dict>
+</plist>
