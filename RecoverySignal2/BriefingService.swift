@@ -105,7 +105,7 @@ enum BriefingService {
         let sorted = days.sorted { $0.date > $1.date }
         let score = RecoveryScore.compute(from: Array(sorted.prefix(RecoveryScore.baselineDays + 1)))
         let today = sorted.first { Calendar.current.isDate($0.date, inSameDayAs: now) }
-        let targets = EnergyModel.maintenance(from: days).map { EnergyModel.targets(from: days, maintenance: $0) }
+        let targets = EnergyModel.cachedTargets(from: days)
         let sleepPlan = SleepPlanner.plan(days: days, now: now)
 
         let snapshot = WidgetSnapshot(

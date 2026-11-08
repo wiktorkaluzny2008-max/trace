@@ -1,7 +1,9 @@
 import Foundation
 import SQLite3
 
-/// One synchronous transaction stores the complete session and timer together.
+/// One transaction stores the complete session and timer together. WAL with
+/// synchronous=NORMAL survives the app being killed or crashing; it skips the
+/// full disk flush per write, which blocked the main thread on every edit.
 /// Separate from completed SwiftData logs so a failed log save retains the draft.
 @MainActor
 final class WorkoutDraftStore {
@@ -20,7 +22,7 @@ final class WorkoutDraftStore {
             throw Failure(message: message)
         }
         do {
-            try execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA fullfsync=ON; PRAGMA busy_timeout=1500;")
+            try execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1500;")
             try execute("CREATE TABLE IF NOT EXISTS draft (id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)")
         } catch {
             sqlite3_close(database)

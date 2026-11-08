@@ -8,13 +8,20 @@ import SwiftData
 
 /// Lets any screen switch tabs, open the tracker, or open the Today / Trends / Analysis guide.
 struct TabNavigator {
-    var selected: AppTab? = nil
     var select: (AppTab) -> Void = { _ in }
     var showGuide: () -> Void = {}
     /// Jumps to the Train tab.
     var openTrain: () -> Void = {}
     /// Opens Settings as a sheet over the current tab.
     var openSettings: () -> Void = {}
+}
+
+/// The closures are rebuilt on every ContentView redraw but always do the same
+/// thing, so two navigators are always equal. Without this, every screen
+/// reading the navigator (all of Today included) redrew on each tab switch.
+/// Don't add the selected tab back here: that alone redraws Today per tap.
+extension TabNavigator: Equatable {
+    static func == (lhs: TabNavigator, rhs: TabNavigator) -> Bool { true }
 }
 
 extension EnvironmentValues {
@@ -66,6 +73,9 @@ struct ContentView: View {
             try? await Task.sleep(for: .seconds(1.5))
             SwissFoodDatabase.warmUp()
             PolishProductDatabase.warmUp()
+            // The exercise photo cache opens a 300 MB disk cache on first use;
+            // do that off the main thread so the first Train tab tap doesn't.
+            Task.detached(priority: .utility) { _ = ExerciseImageCache.shared }
         }
         #if DEBUG
         // Development only: `-tab trends` opens a tab directly.
@@ -149,7 +159,6 @@ struct ContentView: View {
         .tint(Theme.accent)
         .sensoryFeedback(.selection, trigger: selection)
         .environment(\.tabNavigator, TabNavigator(
-            selected: selectedAppTab,
             select: { tab in switchTo(tab) },
             showGuide: { showsGuide = true },
             openTrain: { selection = .train },

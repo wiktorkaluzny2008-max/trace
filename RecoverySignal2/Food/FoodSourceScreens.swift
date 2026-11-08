@@ -84,10 +84,14 @@ struct FoodSearchScreen: View {
     /// (after a short pause) rather than on every redraw of the list.
     @State private var local: [FoodItem] = []
 
-    private var mine: [FoodItem] {
+    /// Your own foods matching the query, ranked once per search rather than
+    /// on every redraw.
+    @State private var mine: [FoodItem] = []
+
+    private func rankMine() {
         let documents = userFoods.map { SmartSearch.Document(id: $0.id, name: $0.name, extra: [$0.brand ?? ""]) }
         let byID = Dictionary(userFoods.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        return SmartSearch.rank(query: query, in: documents, limit: 30).compactMap { byID[$0.id]?.item }
+        mine = SmartSearch.rank(query: query, in: documents, limit: 30).compactMap { byID[$0.id]?.item }
     }
 
     var body: some View {
@@ -198,13 +202,18 @@ struct FoodSearchScreen: View {
             }
             #endif
         }
+        .onChange(of: userFoods.count) { _, _ in rankMine() }
         .task(id: searchTerm) {
+            rankMine()
             let term = searchTerm
             guard !term.isEmpty else { local = []; return }
             // Let the keystroke land before searching, so typing never waits on it.
             try? await Task.sleep(for: .milliseconds(90))
             guard !Task.isCancelled else { return }
-            local = SwissFoodDatabase.search(term, limit: 30)
+            // Off the main thread: the typo-tolerant pass scans ~13,000 foods.
+            let found = await Task.detached(priority: .userInitiated) { SwissFoodDatabase.search(term, limit: 30) }.value
+            guard !Task.isCancelled else { return }
+            local = found
         }
         .task(id: SearchRequest(query: searchTerm, scope: scope, retry: retryCount)) { await searchProducts() }
     }
@@ -224,7 +233,10 @@ struct FoodSearchScreen: View {
         let request = UUID()
         activeRequest = request
         let q = searchTerm
-        products = PolishProductDatabase.search(q)
+        let polish = AppLanguage.current == .polish
+        let offline = q.isEmpty ? [] : await Task.detached(priority: .userInitiated) { PolishProductDatabase.search(q, polish: polish) }.value
+        guard !Task.isCancelled else { return }
+        products = offline
         productError = nil
         loadingProducts = false
         guard showsProducts, q.count >= 3 else { return }
@@ -237,7 +249,7 @@ struct FoodSearchScreen: View {
             let found = try await OpenFoodFacts().search(q)
             guard !Task.isCancelled, activeRequest == request else { return }
             let liveIDs = Set(found.map(\.id))
-            products = PolishProductDatabase.search(q).filter { !liveIDs.contains($0.id) } + found
+            products = offline.filter { !liveIDs.contains($0.id) } + found
         } catch {
             guard !Task.isCancelled, activeRequest == request else { return }
             productError = error.localizedDescription

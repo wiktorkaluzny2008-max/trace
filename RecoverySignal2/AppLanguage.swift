@@ -10,7 +10,7 @@
 import Foundation
 import UIKit
 
-enum AppLanguage: String, CaseIterable, Identifiable {
+nonisolated enum AppLanguage: String, CaseIterable, Identifiable {
     case english = "en"
     case polish = "pl"
 
@@ -32,6 +32,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     }
 
     /// The language the app is actually running in right now.
+    /// Reads the bundle only, so it's safe from any thread (food search runs off main).
     static var current: AppLanguage {
         let preferred = Bundle.main.preferredLocalizations.first ?? "en"
         return preferred.hasPrefix("pl") ? .polish : .english

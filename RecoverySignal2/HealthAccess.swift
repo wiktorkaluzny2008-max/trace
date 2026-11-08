@@ -72,18 +72,25 @@ final class HealthSync {
 
     /// Refresh the last couple of days from Health after `delay`, folding any
     /// requests that arrive in the meantime into the same refresh.
-    func refreshSoon(after delay: Duration = .seconds(1)) {
+    /// `days` widens the window (e.g. a weigh-in logged for last week); folded
+    /// requests keep the widest window asked for.
+    func refreshSoon(after delay: Duration = .seconds(1), days: Int = 2) {
         pending?.cancel()
+        pendingDays = max(pendingDays, days)
         pending = Task { [weak self] in
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
-            await self?.refreshNow()
+            guard !Task.isCancelled, let self else { return }
+            let window = self.pendingDays
+            self.pendingDays = 2
+            await self.refreshNow(days: window)
         }
     }
 
-    func refreshNow() async {
+    private var pendingDays = 2
+
+    func refreshNow(days: Int = 2) async {
         guard let context = container?.mainContext else { return }
-        try? await MetricsAggregator(context: context).refresh(days: 2)
+        try? await MetricsAggregator(context: context).refresh(days: days)
         BriefingService.update(with: (try? context.fetch(FetchDescriptor<DailyMetrics>(
             sortBy: [SortDescriptor(\.date, order: .reverse)]))) ?? [])
     }

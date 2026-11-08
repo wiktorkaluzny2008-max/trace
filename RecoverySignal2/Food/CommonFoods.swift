@@ -12,7 +12,7 @@
 
 import Foundation
 
-enum CommonFoods {
+nonisolated enum CommonFoods {
     struct Entry {
         let id: String
         let name: String
@@ -271,6 +271,7 @@ enum CommonFoods {
         }
     }
 
+    @MainActor
     static func portions(for item: FoodItem) -> [FoodPortion] {
         guard item.source == .common,
               let entry = entries.first(where: { "common-\($0.id)" == item.id }) else { return [] }

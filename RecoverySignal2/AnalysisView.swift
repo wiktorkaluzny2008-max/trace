@@ -16,11 +16,17 @@ struct AnalysisView: View {
 
     private var days: [DailyMetrics] { allDays }
 
+    /// Each model runs once per data change rather than on every redraw.
+    private func memo<T>(_ key: String, _ compute: () -> T) -> T {
+        DerivedCache.value("analysis.\(key)", inputs: [DaysSignature(allDays).hashValue, dayTags.count], compute)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
+                    // Lazy: a tab's first open only builds the cards on screen.
+                    LazyVStack(alignment: .leading, spacing: 24) {
                         // Both are built on heart rate (TRIMP load, HRV and resting HR).
                         if tracksHeart { trainingLoadSection.id("Training load") }
                         if tracksHeart { fatigueSection.id("Fatigue & stability") }
@@ -49,7 +55,7 @@ struct AnalysisView: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel(text: "Training load", icon: .trainingLoad)
 
-            if let acwr = TrainingLoadModel.compute(from: days) {
+            if let acwr = memo("acwr") { TrainingLoadModel.compute(from: days) } {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -100,7 +106,7 @@ struct AnalysisView: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel(text: "Fatigue & stability", icon: .fatigue)
 
-            if let fatigue = ReadinessModel.fatigue(from: days) {
+            if let fatigue = memo("fatigue") { ReadinessModel.fatigue(from: days) } {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -159,7 +165,7 @@ struct AnalysisView: View {
                 )
             }
 
-            if let stability = ReadinessModel.hrvStability(from: days) {
+            if let stability = memo("stability") { ReadinessModel.hrvStability(from: days) } {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("HRV variability (CV)")
@@ -186,7 +192,7 @@ struct AnalysisView: View {
                 .card(padding: 18)
             }
 
-            if let debt = ReadinessModel.sleepDebt(from: days) {
+            if let debt = memo("debt") { ReadinessModel.sleepDebt(from: days) } {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 14) {
                         GlyphTile(glyph: .sleep, color: debt.hours > 5 ? Theme.warn : Theme.good)
@@ -215,7 +221,7 @@ struct AnalysisView: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel(text: "Energy & metabolism", icon: .energy)
 
-            if let tdee = EnergyModel.adaptiveTDEE(from: days) {
+            if let tdee = memo("tdee") { EnergyModel.adaptiveTDEE(from: days) } {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -257,7 +263,7 @@ struct AnalysisView: View {
                 )
             }
 
-            if let ea = EnergyModel.energyAvailability(from: days) {
+            if let ea = memo("ea") { EnergyModel.energyAvailability(from: days) } {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -302,7 +308,7 @@ struct AnalysisView: View {
                 )
             }
 
-            if let pRatio = EnergyModel.pRatio(from: days) {
+            if let pRatio = memo("pRatio") { EnergyModel.pRatio(from: days) } {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -334,7 +340,7 @@ struct AnalysisView: View {
     // MARK: - Discoveries
 
     private var discoveriesSection: some View {
-        let findings = LagCorrelationMiner.mine(from: days, tags: dayTags)
+        let findings = memo("findings") { LagCorrelationMiner.mine(from: days, tags: dayTags) }
 
         return VStack(alignment: .leading, spacing: 10) {
             SectionLabel(text: "Discovered patterns", icon: .patterns)

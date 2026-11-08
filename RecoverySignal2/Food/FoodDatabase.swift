@@ -14,12 +14,14 @@
 //
 
 import Foundation
+import os
 import SwiftData
 import HealthKit
 
 // MARK: - Swiss database (bundled)
 
-enum SwissFoodDatabase {
+/// Nonisolated so searches can run off the main thread while you type.
+nonisolated enum SwissFoodDatabase {
     private struct Row: Decodable {
         let id: Int
         let en: String
@@ -72,6 +74,7 @@ enum SwissFoodDatabase {
     /// Named USDA portions; survey records default to the source's first portion.
     /// One portion is filed as "medium", two as small + medium, so the default
     /// selection always exists.
+    @MainActor
     static func usdaPortions(for item: FoodItem) -> [FoodPortion] {
         guard let pairs = usdaPortionsByID[item.id] else { return [] }
         let sizes: [FoodPortion.Size]
@@ -121,9 +124,8 @@ enum SwissFoodDatabase {
 
     /// The last query and its results, so a screen that redraws several times
     /// per keystroke doesn't repeat the search.
-    private static var lastQuery = ""
-    private static var lastLimit = 0
-    private static var lastResults: [FoodItem] = []
+    private struct LastSearch { var query = ""; var limit = 0; var results: [FoodItem] = [] }
+    private static let last = OSAllocatedUnfairLock(initialState: LastSearch())
 
     /// Curated sources first when a name matches equally well.
     private static func priority(_ source: FoodItem.Source) -> Int {
@@ -144,6 +146,7 @@ enum SwissFoodDatabase {
         })
     }()
 
+    @MainActor
     static func swissPortions(for item: FoodItem) -> [FoodPortion] {
         guard let pairs = swissServings[item.id] else { return [] }
         let sizes: [FoodPortion.Size] = pairs.count == 1 ? [.medium] : pairs.count == 2 ? [.small, .medium] : [.small, .medium, .large]
@@ -207,7 +210,7 @@ enum SwissFoodDatabase {
     /// close matches, so "brocoli" and "chiken brest" still find their foods.
     static func search(_ query: String, limit: Int = 60) -> [FoodItem] {
         let q = fold(query.trimmingCharacters(in: .whitespaces))
-        if q == lastQuery, limit == lastLimit { return lastResults }
+        if let cached = last.withLock({ $0.query == q && $0.limit == limit ? $0.results : nil }) { return cached }
         let words = q.split(whereSeparator: { $0 == " " || $0 == "," }).map { Array($0.utf8) }
         guard !words.isEmpty else { return [] }
         let hits: [Indexed] = index.filter { entry in words.allSatisfy { contains(entry.keyBytes, $0) } }
@@ -229,10 +232,9 @@ enum SwissFoodDatabase {
                 if results.count >= limit { break }
             }
         }
-        lastQuery = q
-        lastLimit = limit
-        lastResults = results
-        return results
+        let final = results
+        last.withLock { $0 = LastSearch(query: q, limit: limit, results: final) }
+        return final
     }
 }
 

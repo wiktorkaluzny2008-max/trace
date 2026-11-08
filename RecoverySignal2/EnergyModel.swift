@@ -89,6 +89,14 @@ enum EnergyModel {
     }
 
     /// Calorie and macro targets for holding weight at that maintenance level.
+    /// Maintenance-based targets, remembered until the data or settings change
+    /// (see DerivedCache). For callers that run often, like the minute refresh.
+    static func cachedTargets(from days: [DailyMetrics]) -> NutritionTargets? {
+        DerivedCache.value("energy.targets", inputs: DaysSignature(days)) {
+            maintenance(from: days).map { targets(from: days, maintenance: $0) }
+        }
+    }
+
     static func targets(from days: [DailyMetrics], maintenance: MaintenanceEstimate) -> NutritionTargets {
         NutritionTargets(maintenance: maintenance,
                          bodyMassKg: MaintenanceModel.latestBodyMass(days.map { dayEnergy($0) }))

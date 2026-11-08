@@ -20,12 +20,13 @@ struct TrendsView: View {
         // Derived series are computed once per data change, not per chart
         // interaction — touching a chart only redraws that chart.
         let recovery = recoverySeries
-        let targets = EnergyModel.maintenance(from: allDays).map { EnergyModel.targets(from: allDays, maintenance: $0) }
+        let targets = memo("targets") { EnergyModel.maintenance(from: allDays).map { EnergyModel.targets(from: allDays, maintenance: $0) } }
 
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    // Lazy: a tab's first open only builds the cards on screen.
+                    LazyVStack(alignment: .leading, spacing: 16) {
                         if tracksHeart {
                         SectionLabel(text: "Recovery", icon: .recovery)
                             .id("Recovery")
@@ -190,8 +191,16 @@ struct TrendsView: View {
         }
     }
 
+    /// Series are remembered until the data changes (see DerivedCache), so
+    /// opening a sheet or switching tabs doesn't rebuild a year of charts.
+    private func memo<T>(_ key: String, _ compute: () -> T) -> T {
+        DerivedCache.value("trends.\(key)", inputs: DaysSignature(allDays), compute)
+    }
+
     private func points(_ keyPath: KeyPath<DailyMetrics, Double?>) -> [TrendPoint] {
-        allDays.compactMap { day in day[keyPath: keyPath].map { TrendPoint(date: day.date, value: $0) } }
+        memo("points.\(keyPath)") {
+            allDays.compactMap { day in day[keyPath: keyPath].map { TrendPoint(date: day.date, value: $0) } }
+        }
     }
 
     private func points(_ value: (DailyMetrics) -> Double?) -> [TrendPoint] {
@@ -200,24 +209,28 @@ struct TrendsView: View {
 
     /// Recovery for every day that has enough history behind it.
     private var recoverySeries: [TrendPoint] {
-        allDays.indices.compactMap { i in
-            let window = Array(allDays[max(0, i - RecoveryScore.baselineDays)...i])
-            return RecoveryScore.compute(from: window).map { TrendPoint(date: allDays[i].date, value: Double($0.value)) }
+        memo("recovery") {
+            allDays.indices.compactMap { i in
+                let window = Array(allDays[max(0, i - RecoveryScore.baselineDays)...i])
+                return RecoveryScore.compute(from: window).map { TrendPoint(date: allDays[i].date, value: Double($0.value)) }
+            }
         }
     }
 
     private var compositionStack: [StackedPoint] {
-        allDays.flatMap { day -> [StackedPoint] in
+        memo("composition") { allDays.flatMap { day -> [StackedPoint] in
             guard let weight = day.bodyMassKg, let fat = day.bodyFatPercent else { return [] }
             return [StackedPoint(date: day.date, series: "Lean mass", value: weight * (1 - fat / 100)),
                     StackedPoint(date: day.date, series: "Fat mass", value: weight * fat / 100)]
-        }
+        } }
     }
 
     private var trainingStack: [StackedPoint] {
-        allDays.flatMap { day in
-            [StackedPoint(date: day.date, series: "Strength", value: day.strengthMinutes ?? 0),
-             StackedPoint(date: day.date, series: "Cardio", value: day.cardioMinutes ?? 0)]
+        memo("training") {
+            allDays.flatMap { day in
+                [StackedPoint(date: day.date, series: "Strength", value: day.strengthMinutes ?? 0),
+                 StackedPoint(date: day.date, series: "Cardio", value: day.cardioMinutes ?? 0)]
+            }
         }
     }
 

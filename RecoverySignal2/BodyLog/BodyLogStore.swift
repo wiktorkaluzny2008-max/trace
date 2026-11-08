@@ -47,7 +47,11 @@ final class BodyLogStore {
 
     // MARK: Reading
 
+    /// The window the last load covered, so a delete or save reloads the same span.
+    private var loadedDays = 60
+
     func load(days: Int = 365) async {
+        loadedDays = days
         isLoading = true
         defer { isLoading = false }
         let start = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
@@ -104,13 +108,33 @@ final class BodyLogStore {
                                             start: date, end: date))
         }
         try await store.save(objects)
-        await load()
+        // Show the new entry straight away; the list is re-read from Health in
+        // the background so the Save button never waits on a full reload.
+        let own = Bundle.main.bundleIdentifier ?? ""
+        for case let sample as HKQuantitySample in objects {
+            samplesByID[sample.uuid] = sample
+            if sample.quantityType == Self.weightType {
+                weights.append(BodyEntry(id: sample.uuid, kind: .weight, date: sample.startDate,
+                                         value: sample.quantity.doubleValue(for: .gramUnit(with: .kilo)), source: "Trace", isOwn: !own.isEmpty))
+            } else {
+                bodyFat.append(BodyEntry(id: sample.uuid, kind: .bodyFat, date: sample.startDate,
+                                         value: sample.quantity.doubleValue(for: .percent()) * 100, source: "Trace", isOwn: !own.isEmpty))
+            }
+        }
+        weights.sort { $0.date > $1.date }
+        bodyFat.sort { $0.date > $1.date }
+        let days = loadedDays
+        Task { await self.load(days: days) }
     }
 
     func delete(_ entry: BodyEntry) async {
         guard entry.isOwn, let sample = samplesByID[entry.id] else { return }
         try? await store.delete(sample)
-        await load()
+        samplesByID[entry.id] = nil
+        weights.removeAll { $0.id == entry.id }
+        bodyFat.removeAll { $0.id == entry.id }
+        let days = loadedDays
+        Task { await self.load(days: days) }
     }
 
     // MARK: Reminder

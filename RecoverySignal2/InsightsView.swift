@@ -30,7 +30,8 @@ struct InsightsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                // Lazy: a tab's first open only builds the cards on screen.
+                LazyVStack(alignment: .leading, spacing: 24) {
                     storySection
                     weekSummarySection
                     flagsSection
@@ -126,8 +127,11 @@ struct InsightsView: View {
             shift(\.sleepAsleepHours, String(localized: "Sleep"), unit: "", higherIsBetter: true, duration: true),
             shift(\.bodyMassKg, String(localized: "Weight"), unit: "kg", decimals: 1, higherIsBetter: nil)
         ].compactMap { $0 }
-        let findings = Array(LagCorrelationMiner.mine(from: allDays.sorted { $0.date < $1.date }, tags: dayTags)
-            .sorted { abs($0.correlation) > abs($1.correlation) }.prefix(3))
+        // Mining correlations walks the whole history; reuse it until the data changes.
+        let findings = DerivedCache.value("insights.findings", inputs: [DaysSignature(allDays).hashValue, dayTags.count]) {
+            Array(LagCorrelationMiner.mine(from: allDays.sorted { $0.date < $1.date }, tags: dayTags)
+                .sorted { abs($0.correlation) > abs($1.correlation) }.prefix(3))
+        }
 
         return VStack(alignment: .leading, spacing: 0) {
             storyBanner("Compared with your own normal, from \(daysWithData) days of Watch data plus what you logged.")

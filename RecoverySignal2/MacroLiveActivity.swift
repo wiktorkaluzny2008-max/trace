@@ -55,8 +55,7 @@ enum MacroLiveActivity {
         }
 
         let calendar = Calendar.current
-        guard let maintenance = EnergyModel.maintenance(from: days) else { return }
-        let targets = EnergyModel.targets(from: days, maintenance: maintenance)
+        guard let targets = EnergyModel.cachedTargets(from: days) else { return }
         let today = days.first { calendar.isDate($0.date, inSameDayAs: now) }
 
         let state = MacroActivityAttributes.ContentState(

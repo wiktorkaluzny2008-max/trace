@@ -48,10 +48,7 @@ final class WorkoutRecorder {
     }
 
     private(set) var active: ActiveWorkout? {
-        didSet {
-            persist()
-            WorkoutLiveActivity.sync(active, restEndsAt: restEndsAt)
-        }
+        didSet { persist() }
     }
 
     // Live heart rate
@@ -62,10 +59,7 @@ final class WorkoutRecorder {
 
     // Rest timer
     private(set) var restEndsAt: Date? {
-        didSet {
-            persist()
-            WorkoutLiveActivity.sync(active, restEndsAt: restEndsAt)
-        }
+        didSet { persist() }
     }
     private(set) var restDuration: Int = 0
 
@@ -94,6 +88,7 @@ final class WorkoutRecorder {
                                                                     restDuration: restDuration, selectedSetID: nil)))
             }
             if let active { startHeartRate(from: active.start) }
+            WorkoutLiveActivity.sync(active, restEndsAt: restEndsAt)
         } catch {
             // Do not overwrite an unreadable draft. Surface the storage issue.
             draftStore = nil
@@ -522,8 +517,33 @@ final class WorkoutRecorder {
         }
     }
 
+    /// Edits arrive on every keystroke, so the draft write and the Live Activity
+    /// update are coalesced: the latest state lands a moment after typing
+    /// pauses instead of after every digit. Starting, ending and leaving the
+    /// app write straight away (see `flushDraft`).
+    private var pendingFlush: Task<Void, Never>?
+
     private func persist() {
         guard !restoring && !batchingDraft else { return }
+        pendingFlush?.cancel()
+        if active == nil {
+            flushDraft()
+            return
+        }
+        pendingFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            self?.flushDraft()
+        }
+    }
+
+    /// Writes the pending draft and lock-screen state now. Called when the app
+    /// leaves the foreground so nothing typed is lost.
+    func flushDraft() {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+        guard !restoring else { return }
+        WorkoutLiveActivity.sync(active, restEndsAt: restEndsAt)
         guard let draftStore else {
             saveError = "Workout changes could not be saved. Keep Trace open until storage is available."
             return

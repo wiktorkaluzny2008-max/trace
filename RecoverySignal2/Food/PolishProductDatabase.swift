@@ -1,7 +1,7 @@
 import Foundation
 
 /// Offline Polish-market labels from Open Food Facts (ODbL), not official Polish tables.
-enum PolishProductDatabase {
+nonisolated enum PolishProductDatabase {
     struct Row: Decodable {
         let code: String
         let name: String
@@ -26,16 +26,22 @@ enum PolishProductDatabase {
     }
     private static let rowsByCode: [String: Row] = Dictionary(rows.map { ($0.code, $0) }, uniquingKeysWith: { a, _ in a })
 
-    static func search(_ query: String) -> [FoodItem] {
+    @MainActor static func search(_ query: String) -> [FoodItem] {
+        search(query, polish: AppLanguage.current == .polish)
+    }
+
+    /// Callable off the main thread; the caller reads the app language first.
+    static func search(_ query: String, polish: Bool) -> [FoodItem] {
         guard !SmartSearch.tokens(query).isEmpty else { return [] }
         return SmartSearch.rank(query: query, in: documents, limit: 40).compactMap { hit in
             guard let row = rowsByCode[hit.id] else { return nil }
-            return FoodItem(id: "off-\(row.code)", name: AppLanguage.current == .polish ? row.name : (row.english ?? row.name),
+            return FoodItem(id: "off-\(row.code)", name: polish ? row.name : (row.english ?? row.name),
                             brand: row.brand, kcal: row.kcal, protein: row.protein, carbs: row.carbs, fat: row.fat,
                             source: .product, barcode: row.code, servingGrams: row.servingGrams)
         }
     }
 
+    @MainActor
     static func portions(for item: FoodItem) -> [FoodPortion] {
         guard rows.contains(where: { "off-\($0.code)" == item.id }), let grams = item.servingGrams else { return [] }
         return [FoodPortion(size: .medium, unit: String(localized: "Label serving"), grams: grams, custom: true)]

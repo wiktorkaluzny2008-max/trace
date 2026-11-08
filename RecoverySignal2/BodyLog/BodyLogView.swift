@@ -11,8 +11,6 @@ import SwiftUI
 import SwiftData
 
 struct BodyLogView: View {
-    @Query(sort: \DailyMetrics.date, order: .forward) private var allDays: [DailyMetrics]
-    @Environment(\.modelContext) private var context
     @State private var log = BodyLogStore.shared
     @State private var weightTenths = 750
     @State private var fatTenths = 180
@@ -120,7 +118,10 @@ struct BodyLogView: View {
         do {
             try await log.save(weightKg: Double(weightTenths) / 10, bodyFatPercent: includeFat ? Double(fatTenths) / 10 : nil,
                                at: date)
-            try? await MetricsAggregator(context: context).refresh(days: 3)
+            // Today, Trends and the energy models pick the new weight up from a
+            // background refresh; the button doesn't wait for it.
+            let daysBack = (Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0) + 2
+            HealthSync.shared.refreshSoon(after: .milliseconds(400), days: min(max(daysBack, 3), 365))
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.snappy) { saved = true }
             date = Date()

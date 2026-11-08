@@ -13,14 +13,26 @@ struct TodayView: View {
 
     private var today: DailyMetrics? { allDays.first }
     private var recent: [DailyMetrics] { Array(allDays.prefix(RecoveryScore.baselineDays + 1)) }
-    private var score: RecoveryScore? { RecoveryScore.compute(from: recent, excluded: DayTagStore.excludedDates(dayTags)) }
+    private var score: RecoveryScore? {
+        memo("score") { RecoveryScore.compute(from: recent, excluded: DayTagStore.excludedDates(dayTags)) }
+    }
+    /// Results computed from the history are reused across redraws (the score
+    /// reveal alone redraws this page dozens of times) until the data changes.
+    private func memo<T>(_ key: String, _ compute: () -> T) -> T {
+        DerivedCache.value("today.\(key)", inputs: [DaysSignature(allDays).hashValue, dayTags.count], compute)
+    }
+    /// Maintenance and the calorie/macro targets built on it.
+    private var nutritionTargets: NutritionTargets? {
+        memo("targets") {
+            EnergyModel.maintenance(from: allDays, profile: profile).map { EnergyModel.targets(from: allDays, maintenance: $0) }
+        }
+    }
     /// Height, age and sex cached from Health on the last refresh.
     private var profile: BodyProfile { BodyProfile.load() }
     @State private var path = NavigationPath()
     /// The page open on Today (Food, Sleep…), restored after iOS closes the app.
     @SceneStorage("today.path") private var savedPath: Data?
     @State private var restoredPath = false
-    @State private var workoutRecorder = WorkoutRecorder.shared
     @Query(sort: \WorkoutLog.start, order: .reverse) private var workoutLogs: [WorkoutLog]
     @State private var editingLayout = false
     @State private var showsRecoveryDrivers = false
@@ -32,7 +44,10 @@ struct TodayView: View {
     @Environment(\.tabNavigator) private var navigator
 
     // Score reveal: the ring counts up from 0 with haptic ticks when the app opens.
-    @State private var displayedScore: Double = 0
+    /// The number the ring shows while it counts up. Held in its own object and
+    /// read only by `RevealingScoreRing`, so the 84-frame count-up redraws the
+    /// ring alone instead of the whole Today page.
+    @State private var reveal = ScoreRevealValue()
     @State private var revealedValue: Int?
     @State private var isRevealing = false
     @State private var haptics = ScoreRevealHaptics()
@@ -46,26 +61,8 @@ struct TodayView: View {
                 VStack(spacing: 24) {
                     todayHeader
 
-                    if let active = workoutRecorder.active {
-                        Button { workoutRecorder.showsActive = true } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "figure.strengthtraining.traditional")
-                                    .font(.system(size: 18, weight: .semibold))
-
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("\(active.name) in progress").font(.subheadline.weight(.semibold))
-                                    Text(active.start, style: .timer).font(.caption.monospacedDigit()).opacity(0.85)
-                                }
-                                Spacer()
-                                Text("Resume").font(.subheadline.weight(.semibold))
-                                Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                            }
-                            .foregroundStyle(Theme.textPrimary)
-                            .padding(18)
-                            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    // Its own view, so edits during a workout don't redraw Today.
+                    ActiveWorkoutBanner()
 
                     ForEach(visibleSections) { item in
                         if !item.needsDailyMetrics || today != nil {
@@ -254,24 +251,7 @@ struct TodayView: View {
         VStack(alignment: .leading, spacing: 18) {
             if let score {
                 recoveryLayout {
-                    ZStack {
-                        Circle()
-                            .fill(score.band.color.opacity(0.13))
-                            .blur(radius: 18)
-                            .frame(width: 122, height: 122)
-                        ScoreRing(progress: displayedScore / 100, color: score.band.color)
-                            .padding(10)
-                        VStack(spacing: 3) {
-                            RingValueText(text: "\(Int(displayedScore.rounded()))%", size: 40)
-                            Text("TODAY")
-                                .font(.system(size: 9, weight: .bold))
-                                .tracking(1.1)
-                                .foregroundStyle(Theme.textTertiary)
-                        }
-                    }
-                    .frame(width: 142, height: 142)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Recovery \(Int(displayedScore.rounded())) percent")
+                    RevealingScoreRing(reveal: reveal, color: score.band.color)
 
                     VStack(alignment: .leading, spacing: 9) {
                         HStack(spacing: 6) {
@@ -368,8 +348,7 @@ struct TodayView: View {
     /// Without a heart-rate tracker there's no recovery to score, so Today leads
     /// with what the phone does know: food against target, and training.
     private var noTrackerCard: some View {
-        let targets = EnergyModel.maintenance(from: Array(allDays), profile: profile)
-            .map { EnergyModel.targets(from: Array(allDays), maintenance: $0) }
+        let targets = nutritionTargets
         let eaten = today.flatMap { Calendar.current.isDateInToday($0.date) ? $0.dietaryEnergyKcal : nil } ?? 0
         let protein = today.flatMap { Calendar.current.isDateInToday($0.date) ? $0.proteinGrams : nil } ?? 0
         let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
@@ -679,6 +658,10 @@ struct TodayView: View {
 
     /// The latest score from the past week, for when today's can't be computed yet.
     private var lastScore: (date: Date, score: RecoveryScore)? {
+        memo("lastScore") { computeLastScore() }
+    }
+
+    private func computeLastScore() -> (date: Date, score: RecoveryScore)? {
         let sorted = allDays.sorted { $0.date < $1.date }
         let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? .distantPast
         for index in sorted.indices.reversed() where sorted[index].date >= cutoff {
@@ -694,8 +677,10 @@ struct TodayView: View {
     /// Every stored day of a metric, oldest first — for charts that compare
     /// the last two weeks with a longer average.
     private func history(_ keyPath: KeyPath<DailyMetrics, Double?>) -> [TrendPoint] {
-        allDays.reversed().compactMap { day in
-            day[keyPath: keyPath].map { TrendPoint(date: day.date, value: $0) }
+        memo("history.\(keyPath)") {
+            allDays.reversed().compactMap { day in
+                day[keyPath: keyPath].map { TrendPoint(date: day.date, value: $0) }
+            }
         }
     }
 
@@ -710,9 +695,8 @@ struct TodayView: View {
 
     @ViewBuilder
     private func nutritionSection(_ today: DailyMetrics) -> some View {
-        let maintenance = EnergyModel.maintenance(from: allDays, profile: profile)
         let goal = GoalSettings.load()
-        let targets = maintenance.map { EnergyModel.targets(from: allDays, maintenance: $0) }
+        let targets = nutritionTargets
 
         VStack(alignment: .leading, spacing: 10) {
             detailHeader("Nutrition", icon: .nutrition, route: .nutrition)
@@ -819,19 +803,19 @@ struct TodayView: View {
     /// afterwards the ring simply shows the score, silently.
     private func revealScore() async {
         guard let score else {
-            displayedScore = 0
+            reveal.value = 0
             return
         }
         let target = Double(score.value)
         guard AppPrefs.animateScore else {
-            displayedScore = target
+            reveal.value = target
             return
         }
         guard !isRevealing else { return }
         let calendar = Calendar.current
         if let last = UserDefaults.standard.object(forKey: Self.lastRevealKey) as? Date,
            calendar.isDateInToday(last) {
-            displayedScore = target
+            reveal.value = target
             return
         }
 
@@ -847,14 +831,14 @@ struct TodayView: View {
         }
 
         if reduceMotion {
-            displayedScore = target
+            reveal.value = target
             if AppPrefs.revealHaptics { haptics.land(on: score.band) }
             return
         }
 
         let hapticsOn = AppPrefs.revealHaptics
         if hapticsOn { haptics.prepare() }
-        displayedScore = 0
+        reveal.value = 0
         try? await Task.sleep(for: .milliseconds(250))   // let the screen settle first
 
         let duration = 1.4
@@ -868,9 +852,9 @@ struct TodayView: View {
             if Task.isCancelled { break }
             let t = Double(frame) / Double(frames)
             let eased = 1 - pow(1 - t, 3)                 // fast start, gentle finish
-            displayedScore = eased * target
+            reveal.value = eased * target
 
-            let bucket = Int(displayedScore / 5)
+            let bucket = Int(reveal.value / 5)
             if !patterned, bucket > lastTickBucket {
                 lastTickBucket = bucket
                 haptics.tick(progress: eased)
@@ -878,7 +862,7 @@ struct TodayView: View {
             try? await Task.sleep(for: .seconds(duration / Double(frames)))
         }
 
-        displayedScore = target
+        reveal.value = target
         if Task.isCancelled {
             haptics.stop()
         } else if !patterned {
@@ -1122,5 +1106,68 @@ private extension View {
     func opensDetail(_ route: DetailRoute, path: Binding<NavigationPath>) -> some View {
         contentShape(Rectangle())
             .onTapGesture { path.wrappedValue.append(route) }
+    }
+}
+
+/// The count-up value behind Today's recovery ring.
+@Observable
+final class ScoreRevealValue {
+    var value: Double = 0
+}
+
+/// Today's recovery ring. Reads the counting value itself so each frame of the
+/// reveal only redraws this view.
+private struct RevealingScoreRing: View {
+    let reveal: ScoreRevealValue
+    let color: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(color.opacity(0.13))
+                .blur(radius: 18)
+                .frame(width: 122, height: 122)
+            ScoreRing(progress: reveal.value / 100, color: color)
+                .padding(10)
+            VStack(spacing: 3) {
+                RingValueText(text: "\(Int(reveal.value.rounded()))%", size: 40)
+                Text("TODAY")
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(1.1)
+                    .foregroundStyle(Theme.textTertiary)
+            }
+        }
+        .frame(width: 142, height: 142)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Recovery \(Int(reveal.value.rounded())) percent")
+    }
+}
+
+/// "Workout in progress" with a way back to the tracker. Watches the recorder
+/// itself so Today doesn't have to.
+private struct ActiveWorkoutBanner: View {
+    @State private var workoutRecorder = WorkoutRecorder.shared
+
+    var body: some View {
+        if let active = workoutRecorder.active {
+            Button { workoutRecorder.showsActive = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "figure.strengthtraining.traditional")
+                        .font(.system(size: 18, weight: .semibold))
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(active.name) in progress").font(.subheadline.weight(.semibold))
+                        Text(active.start, style: .timer).font(.caption.monospacedDigit()).opacity(0.85)
+                    }
+                    Spacer()
+                    Text("Resume").font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(Theme.textPrimary)
+                .padding(18)
+                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
     }
 }

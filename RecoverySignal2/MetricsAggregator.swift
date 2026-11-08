@@ -47,6 +47,8 @@ final class MetricsAggregator {
     }
 
     @MainActor private static var inFlight: Task<Void, Error>?
+    /// Day-tag exclusions the sleep baseline was last learned with.
+    @MainActor private static var lastBaselineExclusions: Set<Date>?
 
     private func refreshSerial(days requestedDays: Int) async throws {
         let defaults = UserDefaults.standard
@@ -98,7 +100,8 @@ final class MetricsAggregator {
         profile.heightCm = profile.heightCm ?? entered.heightCm
         profile.ageYears = profile.ageYears ?? entered.ageYears
         profile.isFemale = profile.isFemale ?? entered.isFemale
-        profile.save()
+        // Only write when it changed: every write wakes settings observers.
+        if profile != entered { profile.save() }
 
         // HR max: measured beats assumed, but fall back to the age formula and
         // finally to a generic 190 so training load still has a scale.
@@ -239,15 +242,23 @@ final class MetricsAggregator {
             day = calendar.date(byAdding: .day, value: 1, to: day)!
         }
 
+        let changed = context.hasChanges
         try context.save()
 
-        // Relearn the personal sleep baseline from the full history.
-        let everyDay = (try? context.fetch(FetchDescriptor<DailyMetrics>(sortBy: [SortDescriptor(\.date)]))) ?? []
+        // Relearn the personal sleep baseline from the full history — only when
+        // something it depends on moved. The minute-by-minute refresh usually
+        // changes nothing, and this walks a year of days on the main thread.
         let tags = (try? context.fetch(FetchDescriptor<DayTag>())) ?? []
-        SleepNeedModel.learnBaseline(from: everyDay, excluded: DayTagStore.excludedDates(tags))
+        let excluded = DayTagStore.excludedDates(tags)
+        if changed || excluded != Self.lastBaselineExclusions {
+            let everyDay = (try? context.fetch(FetchDescriptor<DailyMetrics>(sortBy: [SortDescriptor(\.date)]))) ?? []
+            SleepNeedModel.learnBaseline(from: everyDay, excluded: excluded)
+            Self.lastBaselineExclusions = excluded
+        }
 
         // Latest weight, for workout calorie estimates.
-        if let latest = bodyMassV.sorted(by: { $0.key < $1.key }).last?.value {
+        if let latest = bodyMassV.sorted(by: { $0.key < $1.key }).last?.value,
+           UserDefaults.standard.double(forKey: "workout.lastBodyMass") != latest {
             UserDefaults.standard.set(latest, forKey: "workout.lastBodyMass")
         }
     }

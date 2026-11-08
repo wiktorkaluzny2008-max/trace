@@ -59,6 +59,7 @@ struct RecoverySignal2App: App {
                         HealthSync.shared.refreshSoon(after: .milliseconds(300))
                         HealthSync.shared.startTicking()
                     } else {
+                        WorkoutRecorder.shared.flushDraft()
                         HealthSync.shared.stopTicking()
                     }
                 }

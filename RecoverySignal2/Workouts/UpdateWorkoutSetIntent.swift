@@ -35,8 +35,9 @@ struct UpdateWorkoutSetIntent: LiveActivityIntent {
         if let workout = UUID(uuidString: workoutID), let exercise = UUID(uuidString: exerciseID), let set = UUID(uuidString: setID) {
             let recorder = WorkoutRecorder.shared
             recorder.setFromLockScreen(workoutID: workout, exerciseID: exercise, setID: set, completed: completed)
-            // Await the final snapshot before the system suspends the intent process.
-            WorkoutLiveActivity.sync(recorder.active, restEndsAt: recorder.restEndsAt)
+            // Write the draft and publish the final snapshot now, then await it,
+            // before the system suspends the intent process.
+            recorder.flushDraft()
             await WorkoutLiveActivity.flush()
         }
         #endif
